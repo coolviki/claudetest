@@ -26,7 +26,7 @@ const Portfolio: React.FC = () => {
 
   const fetchPortfolioData = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/portfolio-summary');
+      const response = await fetch('http://localhost:5001/api/portfolio-summary');
       const data = await response.json();
       
       if (response.ok) {
@@ -48,7 +48,7 @@ const Portfolio: React.FC = () => {
     
     for (const holding of holdings) {
       try {
-        const response = await fetch(`http://localhost:5000/api/stock-price/${holding.symbol}`);
+        const response = await fetch(`http://localhost:5001/api/stock-price/${holding.symbol}`);
         const data = await response.json();
         
         if (response.ok) {

@@ -47,7 +47,7 @@ const TransactionConfirmation: React.FC<TransactionConfirmationProps> = ({
     setError('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/transactions', {
+      const response = await fetch('http://localhost:5001/api/transactions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

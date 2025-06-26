@@ -36,7 +36,7 @@ const PDFUpload: React.FC<PDFUploadProps> = ({ onPDFParsed }) => {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/upload-pdf', {
+      const response = await fetch('http://localhost:5001/api/upload-pdf', {
         method: 'POST',
         body: formData,
       });
