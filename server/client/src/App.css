@@ -340,11 +340,52 @@ tr:hover {
 
 .transaction-summary {
   display: flex;
-  gap: 2rem;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 1rem;
   padding: 1rem;
   background-color: #f8f9fa;
   border-radius: 5px;
+}
+
+.summary-stats {
+  display: flex;
+  gap: 2rem;
+}
+
+.export-buttons {
+  display: flex;
+  gap: 1rem;
+}
+
+.export-btn {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.excel-btn {
+  background-color: #28a745;
+  color: white;
+}
+
+.excel-btn:hover {
+  background-color: #218838;
+  transform: translateY(-1px);
+}
+
+.pdf-btn {
+  background-color: #dc3545;
+  color: white;
+}
+
+.pdf-btn:hover {
+  background-color: #c82333;
+  transform: translateY(-1px);
 }
 
 .summary-item {

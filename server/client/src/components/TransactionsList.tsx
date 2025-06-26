@@ -131,6 +131,26 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ transactions, onTra
     setEditingTransaction(prev => prev ? { ...prev, [field]: value } : null);
   };
 
+  const handleExportExcel = () => {
+    const params = new URLSearchParams();
+    if (filters.startDate) params.append('startDate', filters.startDate);
+    if (filters.endDate) params.append('endDate', filters.endDate);
+    if (filters.stockSymbol) params.append('stockSymbol', filters.stockSymbol);
+    
+    const url = `http://localhost:5001/api/export/excel?${params.toString()}`;
+    window.open(url, '_blank');
+  };
+
+  const handleExportPDF = () => {
+    const params = new URLSearchParams();
+    if (filters.startDate) params.append('startDate', filters.startDate);
+    if (filters.endDate) params.append('endDate', filters.endDate);
+    if (filters.stockSymbol) params.append('stockSymbol', filters.stockSymbol);
+    
+    const url = `http://localhost:5001/api/export/pdf?${params.toString()}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="transactions-list">
       <h2>All Transactions ({filteredTransactions.length})</h2>
@@ -187,13 +207,24 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ transactions, onTra
 
       {/* Summary */}
       <div className="transaction-summary">
-        <div className="summary-item">
-          <span>Total Buy Value: </span>
-          <span className="buy-value">₹{totalBuyValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>
+        <div className="summary-stats">
+          <div className="summary-item">
+            <span>Total Buy Value: </span>
+            <span className="buy-value">₹{totalBuyValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>
+          </div>
+          <div className="summary-item">
+            <span>Total Sell Value: </span>
+            <span className="sell-value">₹{totalSellValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>
+          </div>
         </div>
-        <div className="summary-item">
-          <span>Total Sell Value: </span>
-          <span className="sell-value">₹{totalSellValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}</span>
+        
+        <div className="export-buttons">
+          <button onClick={handleExportExcel} className="export-btn excel-btn">
+            📊 Export to Excel
+          </button>
+          <button onClick={handleExportPDF} className="export-btn pdf-btn">
+            📄 Export to PDF
+          </button>
         </div>
       </div>
 

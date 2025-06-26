@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 const { PDFDocument } = require('pdf-lib');
+const PDFParser = require('pdf2json');
+const ExcelJS = require('exceljs');
+const jsPDF = require('jspdf').jsPDF;
+require('jspdf-autotable');
 const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
 const bcrypt = require('bcrypt');
@@ -60,48 +64,111 @@ async function parsePDFTransactions(pdfBuffer, password = null) {
       throw new Error('PDF buffer is empty');
     }
 
+    console.log('Attempting to parse PDF with password:', password ? 'Yes' : 'No');
+
     let text = '';
+    let parseMethod = 'unknown';
     
+    // Method 1: Try pdf-parse first (simple and fast)
     try {
-      // First, try with pdf-parse (works for most non-protected PDFs)
       const options = {};
-      if (password) {
-        options.password = password;
+      if (password && password.trim()) {
+        options.password = password.trim();
+        console.log('Using password with pdf-parse');
       }
       
       const data = await pdfParse(pdfBuffer, options);
       text = data.text;
+      parseMethod = 'pdf-parse';
+      console.log('Successfully parsed with pdf-parse');
     } catch (pdfParseError) {
-      console.log('pdf-parse failed, trying pdf-lib:', pdfParseError.message);
+      console.log('pdf-parse failed:', pdfParseError.message);
       
-      // If pdf-parse fails, try with pdf-lib (better password support)
+      // Method 2: Try pdf2json (better for some PDFs)
       try {
-        const pdfDoc = await PDFDocument.load(pdfBuffer, { 
-          ignoreEncryption: !password,
-          password: password || undefined
+        const pdfParser = new PDFParser();
+        
+        const pdf2jsonResult = await new Promise((resolve, reject) => {
+          pdfParser.on('pdfParser_dataError', reject);
+          pdfParser.on('pdfParser_dataReady', resolve);
+          
+          // pdf2json doesn't support passwords directly, so this will fail for password-protected PDFs
+          pdfParser.parseBuffer(pdfBuffer);
         });
         
-        // pdf-lib doesn't extract text directly, so we'll create a simpler approach
-        // For now, let's provide a helpful message and sample data
-        text = 'PDF loaded successfully but text extraction requires additional setup. Please manually enter your transactions below.';
+        // Extract text from pdf2json result
+        if (pdf2jsonResult && pdf2jsonResult.Pages) {
+          text = pdf2jsonResult.Pages.map(page => 
+            page.Texts.map(textItem => 
+              decodeURIComponent(textItem.R[0].T)
+            ).join(' ')
+          ).join('\n');
+          parseMethod = 'pdf2json';
+          console.log('Successfully parsed with pdf2json');
+        }
+      } catch (pdf2jsonError) {
+        console.log('pdf2json failed:', pdf2jsonError.message);
         
-      } catch (pdfLibError) {
-        console.log('pdf-lib also failed:', pdfLibError.message);
-        
-        if (pdfLibError.message.includes('password') || pdfLibError.message.includes('encrypted')) {
-          throw new Error('This PDF is password-protected. Please enter the correct password.');
-        } else if (pdfParseError.message.includes('password') || pdfParseError.message.includes('No password given')) {
-          throw new Error('This PDF requires a password. Please enter the password and try again.');
-        } else {
-          throw new Error('Unable to read PDF. It might be corrupted, password-protected, or in an unsupported format.');
+        // Method 3: Try pdf-lib to validate if password is correct
+        try {
+          if (password && password.trim()) {
+            // If password is provided, try to load with it
+            const pdfDoc = await PDFDocument.load(pdfBuffer, { 
+              ignoreEncryption: false,
+              password: password.trim()
+            });
+            
+            console.log('PDF loaded with pdf-lib using password, but cannot extract text directly');
+            // If we get here, the password is correct but we can't extract text
+            text = 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION';
+            parseMethod = 'pdf-lib';
+          } else {
+            // No password provided, check if PDF is encrypted
+            try {
+              const pdfDoc = await PDFDocument.load(pdfBuffer, { 
+                ignoreEncryption: true
+              });
+              console.log('PDF loaded with ignoreEncryption, but this means it was encrypted');
+              throw new Error('This PDF is password-protected. Please enter the password and try again.');
+            } catch (ignoreError) {
+              throw new Error('Unable to read PDF. It might be corrupted or in an unsupported format.');
+            }
+          }
+        } catch (pdfLibError) {
+          console.log('pdf-lib failed:', pdfLibError.message);
+          
+          // More specific error handling
+          if (pdfLibError.message.includes('encrypted')) {
+            if (!password || password.trim() === '') {
+              throw new Error('This PDF is password-protected. Please enter the password and try again.');
+            } else {
+              throw new Error('Incorrect password. Please check your password and try again.');
+            }
+          } else if (pdfLibError.message.includes('password') || 
+                     pdfLibError.message.includes('decrypt')) {
+            throw new Error('Incorrect password. Please check your password and try again.');
+          } else if (pdfParseError.message.includes('password') || 
+                     pdfParseError.message.includes('No password given')) {
+            throw new Error('This PDF requires a password. Please enter the password and try again.');
+          } else {
+            throw new Error('Unable to read PDF. It might be corrupted or in an unsupported format.');
+          }
         }
       }
     }
     
-    if (!text || text.trim().length === 0) {
-      throw new Error('PDF contains no readable text. It might be a scanned document or require a password.');
+    // Check if we got any text
+    if (!text || text.trim().length === 0 || text === 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION') {
+      if (text === 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION') {
+        console.log('PDF was loaded successfully but text extraction is not available. Creating sample transaction.');
+        // Password was correct, but we can't extract text - provide sample transaction
+        text = 'PDF loaded successfully with correct password. Please manually verify and enter your transaction details below.';
+      } else {
+        throw new Error('PDF contains no readable text. It might be a scanned document, image-based PDF, or require a password.');
+      }
     }
     
+    console.log(`PDF parsing method used: ${parseMethod}`);
     console.log('PDF text sample:', text.substring(0, 500)); // Debug log
     
     // This is a basic parser - you'll need to adjust based on your broker's PDF format
@@ -168,15 +235,27 @@ async function parsePDFTransactions(pdfBuffer, password = null) {
     
     // If no transactions found with patterns, create a sample transaction for testing
     if (transactions.length === 0) {
-      console.log('No transactions found with patterns. Creating sample data for testing.');
-      transactions.push({
-        stock_symbol: 'SAMPLE',
-        stock_name: 'Sample Stock (Please Edit)',
-        transaction_type: 'BUY',
-        quantity: 1,
-        price: 100.00,
-        transaction_date: new Date().toISOString().split('T')[0]
-      });
+      if (text.includes('PDF loaded successfully')) {
+        console.log('Password-protected PDF loaded but no text patterns found. Creating placeholder transaction.');
+        transactions.push({
+          stock_symbol: 'EDIT_ME',
+          stock_name: 'Edit this transaction with your actual data',
+          transaction_type: 'BUY',
+          quantity: 1,
+          price: 1.00,
+          transaction_date: new Date().toISOString().split('T')[0]
+        });
+      } else {
+        console.log('No transactions found with patterns. Creating sample data for testing.');
+        transactions.push({
+          stock_symbol: 'SAMPLE',
+          stock_name: 'Sample Stock (Please Edit)',
+          transaction_type: 'BUY',
+          quantity: 1,
+          price: 100.00,
+          transaction_date: new Date().toISOString().split('T')[0]
+        });
+      }
     }
     
     return transactions;
@@ -458,6 +537,183 @@ app.get('/api/portfolio-summary', async (req, res) => {
         realizedPnL,
         totalRealizedProfit: realizedPnL.reduce((sum, pnl) => sum + pnl.realizedProfit, 0)
       });
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Export transactions to Excel
+app.get('/api/export/excel', async (req, res) => {
+  try {
+    const { startDate, endDate, stockSymbol } = req.query;
+    
+    let query = 'SELECT * FROM transactions WHERE 1=1';
+    const params = [];
+    
+    if (startDate) {
+      query += ' AND transaction_date >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND transaction_date <= ?';
+      params.push(endDate);
+    }
+    
+    if (stockSymbol) {
+      query += ' AND stock_symbol = ?';
+      params.push(stockSymbol);
+    }
+    
+    query += ' ORDER BY transaction_date DESC';
+    
+    db.all(query, params, async (err, transactions) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Create Excel workbook
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Transactions');
+      
+      // Add headers
+      worksheet.columns = [
+        { header: 'Date', key: 'transaction_date', width: 12 },
+        { header: 'Stock Symbol', key: 'stock_symbol', width: 15 },
+        { header: 'Stock Name', key: 'stock_name', width: 25 },
+        { header: 'Type', key: 'transaction_type', width: 8 },
+        { header: 'Quantity', key: 'quantity', width: 10 },
+        { header: 'Price (₹)', key: 'price', width: 12 },
+        { header: 'Total Value (₹)', key: 'total_value', width: 15 }
+      ];
+      
+      // Add data
+      transactions.forEach(transaction => {
+        worksheet.addRow({
+          transaction_date: transaction.transaction_date,
+          stock_symbol: transaction.stock_symbol,
+          stock_name: transaction.stock_name,
+          transaction_type: transaction.transaction_type,
+          quantity: transaction.quantity,
+          price: transaction.price,
+          total_value: transaction.quantity * transaction.price
+        });
+      });
+      
+      // Style headers
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE6E6FA' }
+      };
+      
+      // Set response headers
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=transactions.xlsx');
+      
+      // Send the Excel file
+      await workbook.xlsx.write(res);
+      res.end();
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Export transactions to PDF
+app.get('/api/export/pdf', (req, res) => {
+  try {
+    const { startDate, endDate, stockSymbol } = req.query;
+    
+    let query = 'SELECT * FROM transactions WHERE 1=1';
+    const params = [];
+    
+    if (startDate) {
+      query += ' AND transaction_date >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND transaction_date <= ?';
+      params.push(endDate);
+    }
+    
+    if (stockSymbol) {
+      query += ' AND stock_symbol = ?';
+      params.push(stockSymbol);
+    }
+    
+    query += ' ORDER BY transaction_date DESC';
+    
+    db.all(query, params, (err, transactions) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Create PDF
+      const doc = new jsPDF();
+      
+      // Title
+      doc.setFontSize(20);
+      doc.text('Stock Portfolio Transactions', 20, 20);
+      
+      // Subtitle with filters
+      doc.setFontSize(12);
+      let subtitle = 'Generated on: ' + new Date().toLocaleDateString();
+      if (startDate || endDate || stockSymbol) {
+        subtitle += ' | Filters: ';
+        if (startDate) subtitle += `From: ${startDate} `;
+        if (endDate) subtitle += `To: ${endDate} `;
+        if (stockSymbol) subtitle += `Stock: ${stockSymbol}`;
+      }
+      doc.text(subtitle, 20, 30);
+      
+      // Prepare table data
+      const tableData = transactions.map(transaction => [
+        transaction.transaction_date,
+        transaction.stock_symbol,
+        transaction.stock_name,
+        transaction.transaction_type,
+        transaction.quantity.toString(),
+        `₹${transaction.price.toFixed(2)}`,
+        `₹${(transaction.quantity * transaction.price).toLocaleString('en-IN', {maximumFractionDigits: 2})}`
+      ]);
+      
+      // Add table
+      doc.autoTable({
+        head: [['Date', 'Symbol', 'Stock Name', 'Type', 'Qty', 'Price', 'Total Value']],
+        body: tableData,
+        startY: 40,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [128, 128, 128] },
+        alternateRowStyles: { fillColor: [245, 245, 245] }
+      });
+      
+      // Calculate totals
+      const totalBuyValue = transactions
+        .filter(t => t.transaction_type === 'BUY')
+        .reduce((sum, t) => sum + (t.quantity * t.price), 0);
+      
+      const totalSellValue = transactions
+        .filter(t => t.transaction_type === 'SELL')
+        .reduce((sum, t) => sum + (t.quantity * t.price), 0);
+      
+      // Add summary
+      const finalY = doc.lastAutoTable.finalY + 10;
+      doc.setFontSize(10);
+      doc.text(`Total Buy Value: ₹${totalBuyValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}`, 20, finalY);
+      doc.text(`Total Sell Value: ₹${totalSellValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}`, 20, finalY + 10);
+      doc.text(`Total Transactions: ${transactions.length}`, 20, finalY + 20);
+      
+      // Set response headers
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename=transactions.pdf');
+      
+      // Send PDF
+      const pdfOutput = doc.output();
+      res.end(Buffer.from(pdfOutput, 'binary'));
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
