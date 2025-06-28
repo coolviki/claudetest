@@ -59,116 +59,25 @@ db.serialize(() => {
 // Helper function to parse PDF and extract transaction data
 async function parsePDFTransactions(pdfBuffer, password = null) {
   try {
-    // Basic validation
     if (!pdfBuffer || pdfBuffer.length === 0) {
       throw new Error('PDF buffer is empty');
     }
 
     console.log('Attempting to parse PDF with password:', password ? 'Yes' : 'No');
 
-    let text = '';
-    let parseMethod = 'unknown';
-    
-    // Method 1: Try pdf-parse first (simple and fast)
-    try {
-      const options = {};
-      if (password && password.trim()) {
-        options.password = password.trim();
-        console.log('Using password with pdf-parse');
-      }
-      
-      const data = await pdfParse(pdfBuffer, options);
-      text = data.text;
-      parseMethod = 'pdf-parse';
-      console.log('Successfully parsed with pdf-parse');
-    } catch (pdfParseError) {
-      console.log('pdf-parse failed:', pdfParseError.message);
-      
-      // Method 2: Try pdf2json (better for some PDFs)
-      try {
-        const pdfParser = new PDFParser();
-        
-        const pdf2jsonResult = await new Promise((resolve, reject) => {
-          pdfParser.on('pdfParser_dataError', reject);
-          pdfParser.on('pdfParser_dataReady', resolve);
-          
-          // pdf2json doesn't support passwords directly, so this will fail for password-protected PDFs
-          pdfParser.parseBuffer(pdfBuffer);
-        });
-        
-        // Extract text from pdf2json result
-        if (pdf2jsonResult && pdf2jsonResult.Pages) {
-          text = pdf2jsonResult.Pages.map(page => 
-            page.Texts.map(textItem => 
-              decodeURIComponent(textItem.R[0].T)
-            ).join(' ')
-          ).join('\n');
-          parseMethod = 'pdf2json';
-          console.log('Successfully parsed with pdf2json');
-        }
-      } catch (pdf2jsonError) {
-        console.log('pdf2json failed:', pdf2jsonError.message);
-        
-        // Method 3: Try pdf-lib to validate if password is correct
-        try {
-          if (password && password.trim()) {
-            // If password is provided, try to load with it
-            const pdfDoc = await PDFDocument.load(pdfBuffer, { 
-              ignoreEncryption: false,
-              password: password.trim()
-            });
-            
-            console.log('PDF loaded with pdf-lib using password, but cannot extract text directly');
-            // If we get here, the password is correct but we can't extract text
-            text = 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION';
-            parseMethod = 'pdf-lib';
-          } else {
-            // No password provided, check if PDF is encrypted
-            try {
-              const pdfDoc = await PDFDocument.load(pdfBuffer, { 
-                ignoreEncryption: true
-              });
-              console.log('PDF loaded with ignoreEncryption, but this means it was encrypted');
-              throw new Error('This PDF is password-protected. Please enter the password and try again.');
-            } catch (ignoreError) {
-              throw new Error('Unable to read PDF. It might be corrupted or in an unsupported format.');
-            }
-          }
-        } catch (pdfLibError) {
-          console.log('pdf-lib failed:', pdfLibError.message);
-          
-          // More specific error handling
-          if (pdfLibError.message.includes('encrypted')) {
-            if (!password || password.trim() === '') {
-              throw new Error('This PDF is password-protected. Please enter the password and try again.');
-            } else {
-              throw new Error('Incorrect password. Please check your password and try again.');
-            }
-          } else if (pdfLibError.message.includes('password') || 
-                     pdfLibError.message.includes('decrypt')) {
-            throw new Error('Incorrect password. Please check your password and try again.');
-          } else if (pdfParseError.message.includes('password') || 
-                     pdfParseError.message.includes('No password given')) {
-            throw new Error('This PDF requires a password. Please enter the password and try again.');
-          } else {
-            throw new Error('Unable to read PDF. It might be corrupted or in an unsupported format.');
-          }
-        }
-      }
+    const options = {};
+    if (password && password.trim()) {
+      options.password = password.trim();
+    }
+
+    const data = await pdfParse(pdfBuffer, options);
+    const text = data.text;
+
+    if (!text || text.trim().length === 0) {
+      throw new Error('PDF contains no readable text. It might be a scanned document or image-based PDF.');
     }
     
-    // Check if we got any text
-    if (!text || text.trim().length === 0 || text === 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION') {
-      if (text === 'PDF_LOADED_BUT_NO_TEXT_EXTRACTION') {
-        console.log('PDF was loaded successfully but text extraction is not available. Creating sample transaction.');
-        // Password was correct, but we can't extract text - provide sample transaction
-        text = 'PDF loaded successfully with correct password. Please manually verify and enter your transaction details below.';
-      } else {
-        throw new Error('PDF contains no readable text. It might be a scanned document, image-based PDF, or require a password.');
-      }
-    }
-    
-    console.log(`PDF parsing method used: ${parseMethod}`);
+    console.log('Successfully parsed with pdf-parse');
     console.log('PDF text sample:', text.substring(0, 500)); // Debug log
     
     // This is a basic parser - you'll need to adjust based on your broker's PDF format
@@ -235,32 +144,27 @@ async function parsePDFTransactions(pdfBuffer, password = null) {
     
     // If no transactions found with patterns, create a sample transaction for testing
     if (transactions.length === 0) {
-      if (text.includes('PDF loaded successfully')) {
-        console.log('Password-protected PDF loaded but no text patterns found. Creating placeholder transaction.');
-        transactions.push({
-          stock_symbol: 'EDIT_ME',
-          stock_name: 'Edit this transaction with your actual data',
-          transaction_type: 'BUY',
-          quantity: 1,
-          price: 1.00,
-          transaction_date: new Date().toISOString().split('T')[0]
-        });
-      } else {
-        console.log('No transactions found with patterns. Creating sample data for testing.');
-        transactions.push({
-          stock_symbol: 'SAMPLE',
-          stock_name: 'Sample Stock (Please Edit)',
-          transaction_type: 'BUY',
-          quantity: 1,
-          price: 100.00,
-          transaction_date: new Date().toISOString().split('T')[0]
-        });
-      }
+      console.log('No transactions found with patterns. Creating sample data for testing.');
+      transactions.push({
+        stock_symbol: 'SAMPLE',
+        stock_name: 'Sample Stock (Please Edit)',
+        transaction_type: 'BUY',
+        quantity: 1,
+        price: 100.00,
+        transaction_date: new Date().toISOString().split('T')[0]
+      });
     }
     
     return transactions;
   } catch (error) {
     console.error('PDF parsing error:', error);
+    if (error.message.includes('Invalid PDF structure') || error.message.includes('encrypted')) {
+        if (!password || password.trim() === '') {
+            throw new Error('This PDF is password-protected. Please enter the password and try again.');
+        } else {
+            throw new Error('Incorrect password. Please check your password and try again.');
+        }
+    }
     throw new Error('Failed to parse PDF: ' + error.message);
   }
 }
